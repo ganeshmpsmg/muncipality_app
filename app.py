@@ -3,7 +3,6 @@ import pickle
 import folium
 from folium.plugins import Geocoder
 from streamlit_folium import st_folium
-import streamlit.components.v1 as components
 
 # ---------------- LOAD MODELS ----------------
 try:
@@ -25,70 +24,8 @@ if 'latitude' not in st.session_state:
     st.session_state.latitude = 20.5937  # India center
 if 'longitude' not in st.session_state:
     st.session_state.longitude = 78.9629
-if 'gps_clicked' not in st.session_state:
-    st.session_state.gps_clicked = False
-
-# ---------------- BROWSER GPS COMPONENT ----------------
-def get_browser_location():
-    """JavaScript component to get browser GPS location"""
-    html_code = """
-    <script>
-    function getLocation() {
-        if (navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(showPosition, showError);
-            document.getElementById("status").innerHTML = "Getting location...";
-        } else {
-            document.getElementById("status").innerHTML = "Geolocation is not supported by this browser.";
-        }
-    }
-    
-    function showPosition(position) {
-        const lat = position.coords.latitude;
-        const lng = position.coords.longitude;
-        
-        // Send data to Streamlit
-        window.parent.postMessage({
-            type: 'streamlit:setComponentValue',
-            value: {lat: lat, lng: lng}
-        }, '*');
-        
-        document.getElementById("status").innerHTML = 
-            "✅ Location found: " + lat.toFixed(6) + ", " + lng.toFixed(6);
-    }
-    
-    function showError(error) {
-        let errorMsg = "";
-        switch(error.code) {
-            case error.PERMISSION_DENIED:
-                errorMsg = "❌ User denied location permission";
-                break;
-            case error.POSITION_UNAVAILABLE:
-                errorMsg = "❌ Location information unavailable";
-                break;
-            case error.TIMEOUT:
-                errorMsg = "❌ Request timed out";
-                break;
-            case error.UNKNOWN_ERROR:
-                errorMsg = "❌ Unknown error occurred";
-                break;
-        }
-        document.getElementById("status").innerHTML = errorMsg;
-    }
-    </script>
-    
-    <button onclick="getLocation()" style="
-        background-color: #4CAF50;
-        color: white;
-        padding: 10px 20px;
-        border: none;
-        border-radius: 4px;
-        cursor: pointer;
-        font-size: 16px;
-        margin-bottom: 10px;
-    ">📍 Use My Current Location (GPS)</button>
-    <p id="status" style="font-size: 14px; color: #666;"></p>
-    """
-    return components.html(html_code, height=100)
+if 'location_set' not in st.session_state:
+    st.session_state.location_set = False
 
 # ---------------- COMPLAINT INPUT ----------------
 complaint = st.text_area("Describe your complaint", height=100)
@@ -96,35 +33,52 @@ complaint = st.text_area("Describe your complaint", height=100)
 st.markdown("---")
 st.subheader("📍 Select Location")
 
-# GPS Button with JavaScript
-st.markdown("**Option 1: Use GPS**")
-location_data = get_browser_location()
+# ---------------- LOCATION INPUT OPTIONS ----------------
+st.markdown("**Choose a method to set your location:**")
 
-# Update session state if GPS data received
-if location_data and isinstance(location_data, dict):
-    if 'lat' in location_data and 'lng' in location_data:
-        st.session_state.latitude = location_data['lat']
-        st.session_state.longitude = location_data['lng']
-        st.session_state.gps_clicked = True
-        st.success(f"GPS Location: {st.session_state.latitude:.6f}, {st.session_state.longitude:.6f}")
+# Method 1: Manual Coordinate Input
+with st.expander("🔢 Option 1: Enter Coordinates Manually"):
+    col1, col2 = st.columns(2)
+    with col1:
+        manual_lat = st.number_input("Latitude", value=st.session_state.latitude, format="%.6f")
+    with col2:
+        manual_lon = st.number_input("Longitude", value=st.session_state.longitude, format="%.6f")
+    
+    if st.button("Set Manual Location"):
+        st.session_state.latitude = manual_lat
+        st.session_state.longitude = manual_lon
+        st.session_state.location_set = True
+        st.success(f"✅ Location set to: {manual_lat:.6f}, {manual_lon:.6f}")
+        st.rerun()
 
-st.markdown("**Option 2: Click on Map or Search Location**")
+# Method 2: Browser Geolocation (Instructions)
+with st.expander("📍 Option 2: Browser GPS (Enable in your browser)"):
+    st.info("""
+    **To use browser GPS:**
+    1. Your browser will ask for location permission
+    2. Click on the map marker that appears at your location
+    3. The coordinates will be automatically set
+    
+    **Note:** Make sure location services are enabled in your browser settings.
+    """)
 
-# ---------------- MAP ----------------
+st.markdown("**Option 3: Click on Map or Search Location**")
+
+# ---------------- MAP WITH GEOLOCATION ----------------
 # Create map centered on current session state location
 m = folium.Map(
     location=[st.session_state.latitude, st.session_state.longitude],
-    zoom_start=13 if st.session_state.gps_clicked else 5,
+    zoom_start=13 if st.session_state.location_set else 5,
     tiles=None,
     control_scale=True
 )
 
-# Add current location marker if GPS was used
-if st.session_state.gps_clicked:
+# Add current location marker if location was set
+if st.session_state.location_set:
     folium.Marker(
         [st.session_state.latitude, st.session_state.longitude],
-        popup="Your Current Location",
-        tooltip="Current Location",
+        popup="Selected Location",
+        tooltip="Current Selection",
         icon=folium.Icon(color='red', icon='info-sign')
     ).add_to(m)
 
@@ -157,6 +111,10 @@ folium.TileLayer(
     control=True
 ).add_to(m)
 
+# Add geolocation button to map
+from folium.plugins import LocateControl
+LocateControl(auto_start=False, position='topright').add_to(m)
+
 # Click popup
 m.add_child(folium.LatLngPopup())
 
@@ -169,25 +127,31 @@ folium.LayerControl(collapsed=False).add_to(m)
 # Render map
 map_data = st_folium(m, height=450, width=700, key="map")
 
-# ---------------- GET COORDINATES ----------------
+# ---------------- GET COORDINATES FROM MAP ----------------
 # Update coordinates based on map interaction
-if map_data and map_data.get("last_clicked"):
-    st.session_state.latitude = map_data["last_clicked"]["lat"]
-    st.session_state.longitude = map_data["last_clicked"]["lng"]
-    st.info(f"Map Location: {st.session_state.latitude:.6f}, {st.session_state.longitude:.6f}")
-elif map_data and map_data.get("center") and not st.session_state.gps_clicked:
-    # Only update from center if GPS wasn't clicked (for search functionality)
-    st.session_state.latitude = map_data["center"]["lat"]
-    st.session_state.longitude = map_data["center"]["lng"]
+if map_data:
+    if map_data.get("last_clicked"):
+        st.session_state.latitude = map_data["last_clicked"]["lat"]
+        st.session_state.longitude = map_data["last_clicked"]["lng"]
+        st.session_state.location_set = True
+        st.info(f"📍 Map Location: {st.session_state.latitude:.6f}, {st.session_state.longitude:.6f}")
 
 # Display current coordinates
-st.markdown(f"**Current Selected Location:** `{st.session_state.latitude:.6f}, {st.session_state.longitude:.6f}`")
+st.markdown(f"**📌 Current Selected Location:** `{st.session_state.latitude:.6f}, {st.session_state.longitude:.6f}`")
+
+# Display location status
+if st.session_state.location_set:
+    st.success("✅ Location has been set")
+else:
+    st.warning("⚠️ Using default location. Please select your actual location.")
 
 # ---------------- SUBMIT COMPLAINT ----------------
 st.markdown("---")
 if st.button("🚀 Submit Complaint", type="primary"):
     if len(complaint.strip()) < 5:
         st.error("⚠️ Please enter a valid complaint (minimum 5 characters)")
+    elif not st.session_state.location_set:
+        st.warning("⚠️ Please select your location before submitting")
     else:
         # ML Prediction
         vec = vectorizer.transform([complaint])
